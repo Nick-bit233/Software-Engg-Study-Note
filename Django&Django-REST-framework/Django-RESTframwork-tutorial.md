@@ -57,7 +57,7 @@ from rest_framework import serializers
 
 导入django REST framework的对应包。
 
-对于每个数据模型类，创建一个对应的Serializer类，命名为`XXXXSerializer`，如对User类，创建`UserSerializer`类，其继承自`serializers.HyperlinkedModelSerializer`类：
+<span id=0>对于每个数据模型类，创建一个对应的Serializer类，命名为`XXXXSerializer`，如对User类，创建`UserSerializer`类，其继承自`serializers.HyperlinkedModelSerializer`类：</span>
 
 ```python
 class UserSerializer(serializers.HyperlinkedModelSerializer):
@@ -721,9 +721,399 @@ http --json POST http://127.0.0.1:8000/snippets/ code="print(456)"
 
 ### 3 基于类的视图实现 Class-based Views
 
+这一部分我，我们介绍如何使用“基于类的视图”（Views）来代替之前写的“基于函数的视图”。这将有利于我们将部分有重复功能的方法复用，使得代码更加精炼。
+
+#### 创建视图类
+
+修改之前的`snippets/views.py`文件，这一次，我们要将每个处理请求URL的函数都改为类：
+
+```python
+from snippets.models import Snippet
+from snippets.serializers import SnippetSerializer
+
+# 使用APIView代替之前的api_view，这将是我们继承的基类
+from rest_framework.views import APIView 
+from rest_framework.response import Response
+from rest_framework import status
+
+# 这是django的一个异常类，用来抛出异常
+from django.http import Http404
+
+# 用来处理获取snippets列表的URL请求，记得继承APIView类
+class SnippetList(APIView):
+    
+    # 类的函数名标识了对应处理的请求类型
+    def get(self, request, format=None):
+        snippets = Snippet.objects.all()
+        serializer = SnippetSerializer(snippets, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, format=None):
+        serializer = SnippetSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# 用来处理单个snippets增删改查的URL请求，记得继承APIView类
+class SnippetDetail(APIView):
+    
+    # 这是一个私有函数，使用时记得要加上前缀`self.`
+    def get_object(self, pk):
+        try:
+            return Snippet.objects.get(pk=pk)
+        except Snippet.DoesNotExist:
+            raise Http404
+
+    def get(self, request, pk, format=None):
+        snippet = self.get_object(pk)
+        serializer = SnippetSerializer(snippet)
+        return Response(serializer.data)
+
+    def put(self, request, pk, format=None):
+        snippet = self.get_object(pk)
+        serializer = SnippetSerializer(snippet, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk, format=None):
+        snippet = self.get_object(pk)
+        snippet.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+```
+
+我们将不同的请求方法分用不同的函数处理，这样代码就分的更开了，以便后续维护。
+
+修改为类视图后，需要在路由文件`snippets/urls.py`中对视图的引用做同样的修改，方法如下：
+
+```python
+from django.urls import path
+from rest_framework.urlpatterns import format_suffix_patterns
+from snippets import views
+
+urlpatterns = [
+    # 调用视图类的`as_view()`函数即可
+    path('snippets/', views.SnippetList.as_view()),
+    path('snippets/<int:pk>/', views.SnippetDetail.as_view()),
+]
+
+urlpatterns = format_suffix_patterns(urlpatterns)
+```
+
+#### 使用混入模板(mixins)
+
+对大多数的数据模型，**增删改查**都是最常用的数据操作。使用视图类的好处之一就是可以将这四种基本操作模板化。在REST framework中提供了一个*混入*（mixin）类，用来实现这些模板操作。
+
+因此，我们可以进一步简化之前的`views.py`代码，套用mixin类的模板来实现：
+
+```python
+from snippets.models import Snippet
+from snippets.serializers import SnippetSerializer
+# 导入mixins和generic模板类包
+from rest_framework import mixins
+from rest_framework import generics
+"""
+注意：使用模板包时，generics类会为我们自动生成APIView，所以无需导入APIView包
+"""
+
+# 使用mixins模板创建视图类，根据所需要的功能继承其相应的Mixin类
+# `generics.GenericAPIView`用来生成APIView视图
+class SnippetList(mixins.ListModelMixin,
+                  mixins.CreateModelMixin,
+                  generics.GenericAPIView):
+    # 初始化Mixin类数据成员，包括所有数据模型对象(queryset)和对应的序列化类对象
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+
+    # 在请求处理函数中，使用Self直接调用对应Mixin类继承而来的函数
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
+
+# `SnippetDetail`类的模板实现基本同理  
+class SnippetDetail(mixins.RetrieveModelMixin,
+                    mixins.UpdateModelMixin,
+                    mixins.DestroyModelMixin,
+                    generics.GenericAPIView):
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+
+    def get(self, request, *args, **kwargs):
+        return self.retrieve(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        return self.destroy(request, *args, **kwargs)   
+```
+
+在`mixins`模板类中，提供了一系列基本数据操作的子类，但我们需要实现的视图类包含其中的哪些操作时，我们就可以直接继承该子类，然后使用REST framework为我们定义好的方法，简单的总结如下：
+
+> python基础知识普及：
+>
+> `args` 是 arguments 的缩写，表示位置参数；`kwargs` 是 keyword arguments 的缩写，表示关键字参数（一个字典）；前面加入`*`和`**`表示这些参数**按照传入顺序**形成一个列表或字典，供函数使用。
+
+| mixins类                    | 功能                                 | 返回函数                                  |
+| --------------------------- | ------------------------------------ | ----------------------------------------- |
+| `mixins.CreateModelMixin`   | 创建数据模型（增）                   | `self.create(request, *args, **kwargs)`   |
+| `mixins.RetrieveModelMixin` | 查询单个数据（查）                   | `self.retrieve(request, *args, **kwargs)` |
+| `minxins.ListModelMixin`    | 查询`queryset`中的所有数据组成的列表 | `self.list(request, *args, **kwargs)`     |
+| `mixins.UpdateModelMixin`   | 更新单个数据模型（改）               | `self.update(request, *args, **kwargs)`   |
+| `mixins.DestroyModelMixin`  | 删除单个数据模型（删）               | `self.destroy(request, *args, **kwargs)`  |
+
+同时，不要忘了继承`generics.GenericAPIView`类，它相当于模板类APIView实现。
+
+#### 使用通用视图类模板(generic class-based views)
+
+如果你的视图类中*只涉及*以上增删改查的操作，而不涉及其他的自定义操作了，那么在`generics`中也给你提供了对应的子类，你只要传入你想要的操作对应的名称就行了！
+
+最终，我们的视图类可以简化成这种样子：
+
+```python
+from snippets.models import Snippet
+from snippets.serializers import SnippetSerializer
+from rest_framework import generics
+
+# 这表示，我们让generics帮我们实现`List`和`Create`操作
+class SnippetList(generics.ListCreateAPIView):
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+
+# 同样，我们让generics帮我们实现`Retrieve`、`Update`和`Destroy`操作
+class SnippetDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+```
+
+这属实是不能再简化了（只有9行了啊，各位！）
+
+不过一旦你的视图函数中有对于数据有任何的特殊化操作，这种方法就不适用了，这时还是需要自行撰写视图类函数（或者，去重载一个你自己的APIView子类，详见[Creating custom mixins](https://www.django-rest-framework.org/api-guide/generic-views/#creating-custom-mixins)）。
+
 ### 4 授权与鉴权 Authentication & Permissions
 
+到目前为止，我们的API还没有任何授权限制。也就是说，任何人都可以创建、修改和删除“代码高亮帖子”。为了安全性考虑，我们应该加入以下限制：
+
+- 每个代码块必须标识其创作者（上传者）
+- 只有经过授权的用户才能创建新的代码块
+- 只有每个代码块的创作者本人才能更新或删除它
+- 未经授权的用户可以用于所有代码块的*只读*权限
+
+#### 修改模型
+
+首先，我们需要在代码块`Snippet`类中标识每个代码块的创作者。因此我们要去修改这个model里面定义的内容。又因为创作者是一个用户，其也是一个数据模型，所以我们需要弄清楚这两个实体之间的关系。
+
+显然，一个用户可以创作多个代码块，而每个代码块只有一个作者，因此我们将使用**多对一**关系：
+
+修改`models.py`，加入如下内容：
+
+```python
+# 新增多对一外键
+owner = models.ForeignKey('auth.User', /
+                          related_name='snippets', on_delete=models.CASCADE)
+# 哦对了，还有新增一个文本字段，用来存储高亮处理后的代码
+highlighted = models.TextField()
+```
+
+既然增加了存储高亮代码块的部分，那么我们要在数据模型修改的时候，将高亮后的代码存进这个字段，所以修改`.save()`函数如下：
+
+```python
+...
+# 先额外导入这些包
+from pygments.lexers import get_lexer_by_name
+from pygments.formatters.html import HtmlFormatter
+from pygments import highlight
+
+def save(self, *args, **kwargs):
+    """
+    使用`pygments` 库将code字段转化为高亮代码字段，存储到highlighted字段
+    """
+    lexer = get_lexer_by_name(self.language)
+    linenos = 'table' if self.linenos else False
+    options = {'title': self.title} if self.title else {}
+    formatter = HtmlFormatter(style=self.style, linenos=linenos,
+                              full=True, **options)
+    self.highlighted = highlight(self.code, lexer, formatter)
+    super(Snippet, self).save(*args, **kwargs)
+```
+
+完成对数据模型的改动后，我们使用命令行刷新数据库，并再额外创建几个用户用来测试：
+
+```python
+# 先drop，再创建数据库（windows下请使用windows命令 或 在IDE中drop数据库）
+rm -f db.sqlite3
+rm -r snippets/migrations
+python manage.py makemigrations snippets
+python manage.py migrate
+
+# 创建另一个超级用户
+python manage.py createsuperuser
+```
+
+#### 创建用户序列化类
+
+既然我们的数据模型现在需要用户的模型外键，那么我们也需要提供一些用户数据操作的API，所以需要建立一个新的序列化类代表用户（这部分内容和我们在[Qucikstart](#0)中做的相似）。在`serializers.py`我们增加：
+
+```python
+from django.contrib.auth.models import User
+
+class UserSerializer(serializers.ModelSerializer):
+    snippets = serializers.PrimaryKeyRelatedField(many=True, queryset=Snippet.objects.all())
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'snippets']
+```
+
+注意我们使用了`serializers.PrimaryKeyRelatedField()`，这是因为snippets是关系中“多”的一方，它是不会被`ModelSerializer`自动处理的，因此需要我们手动处理。（后面我们会说到如何解决这个问题，详见[这里](#5)）
+
+同时更新`views.py`，增加处理用户信息和用户列表的视图层：
+
+```python
+from django.contrib.auth.models import User
+from snippets.serializers import UserSerializer
+
+class UserList(generics.ListAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+
+
+class UserDetail(generics.RetrieveAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+```
+
+将对User的访问加入路由：
+
+```python
+# 加入path到文件`snippets/urls.py`的urlpatterns中：
+path('users/', views.UserList.as_view()),
+path('users/<int:pk>/', views.UserDetail.as_view()),
+```
+
+#### 传递用户数据
+
+到现在为止，我们在创建”代码块“实例的时候，还没有包含任何有关用户的数据。接下来我们要做的就是在创建的时候，把当前登录用户的数据，通过视图层和序列化层写进我们修改过的数据模型里。
+
+在视图层，我们增加一个名为`.perform_create()`的函数，重载这个函数允许我们插手实例创建的步骤，从而将请求中的数据（用户）写进序列化对象中：
+
+```python
+# 在SnippetList类中添加如下函数
+def perform_create(self, serializer):
+    serializer.save(owner=self.request.user)
+```
+
+现在，我们的序列化对象在调用`create()`函数时，一个新的名为`owner`的字段就会被传入，其他请求中的有效数据不受影响。
+
+于是乎，我们需要继续修改序列化层，打开`serializers.py`，修改定义如下：
+
+```python
+class SnippetSerializer(serializers.ModelSerializer):
+	# 从视图层的owner字段中，提取用户名（只读）存储到数据库的owner字段中
+	owner = serializers.ReadOnlyField(source='owner.username')
+    class Meta:
+        model = Snippet
+        fields = ['id', 'title', 'code', 'linenos', 'language', 'style', 'owner']
+```
+
+别忘了在Meta子类中，也加入'owner'这个字段。
+
+在这里我们使用了`ReadOnlyField`的类型，这个类型的字段永远是只读的，也就是说在仅在序列化（创建、读数据库）到时候使用，而反序列化（写入、修改数据库的时候）不允许使用，从而保证了任何用户无权篡改作者信息。对于这里的用户名类型，也可以用`CharField(read_only=True)`代替只读类型。
+
+#### 增加访问权限控制
+
+现在，所有的代码块对象都会存储一个有关联的用户对象了，接下来的步骤就是保证“只有授权用户才可以创建、更新和删除对应的代码块”。
+
+在REST framework中，有一系列授权模块，用来限制用户有什么权限来访问特定的视图。
+
+在视图层`views.py`导入授权模块，名为`permissions`：
+
+```python
+from rest_framework import permissions
+```
+
+然后，添加以下授权语句到每个视图类，包括`SnippetList` 和 `SnippetDetail`:
+
+```python
+permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+```
+
+`IsAuthenticatedOrReadOnly`值表示有授权的用户（已登录）才可以有完全访问权限，否则均为只读权限。
+
+#### 增加登陆模块
+
+既然现在API需要授权才能访问，所以我们还需要一个登陆接口，能让授权用户得以登陆。
+
+你大可以自己实现自己所需要的登陆接口。不过REST framework提供了一个简易的，用于后台测试的登陆接口，你只要做的是在**项目配置文件夹**的路由文件`urls.py`中加入REST framework 提供的登陆视图：
+
+```python
+urlpatterns += [
+    # url的名称`api-auth/`可以自定义
+    path('api-auth/', include('rest_framework.urls')),
+]
+```
+
+现在访问本地浏览器，你可以在右上角看到一个登陆按钮，那么调用接口就成功了。
+
+#### 对象级别鉴权
+
+到目前为止，还有一个问题：现在已登录的用户即可访问所有代码块对象，但我们要求只有**创建者本人**，才可以更新或删除自己的代码块，这就涉及到单个对象级别的鉴权。
+
+为了实现这一功能，我们在`snippet/`文件夹下新建一个`permissions.py`代码文件：
+
+```python
+from rest_framework import permissions
+
+# 新建授权类，继承授权基类
+class IsOwnerOrReadOnly(permissions.BasePermission):
+    
+    # 自定义一个授权函数，其只允许创建者本人更新对象
+    def has_object_permission(self, request, view, obj):
+        # 读取代码块无需鉴权，所以我们直接允许以下类型的请求，
+        # permissions.SAFE_METHODS，即： GET, HEAD 或 OPTIONS
+        if request.method in permissions.SAFE_METHODS:
+            return True
+
+        # 除去以上类型的“安全请求”，返回对象的作者与请求的用户的判断 以确定权限
+        return obj.owner == request.user
+```
+
+这样我们的自定义鉴权类就实现了。这里判定函数的参数分别为
+
+`request`：传入的请求类
+
+`view`：使用此鉴权的视图类
+
+`obj`：访问的序列化模型类
+
+现在我们可以在视图类中加入我们的自定义鉴权：
+
+```python
+# from snippets.permissions import IsOwnerOrReadOnly
+# 注意我们定义的文件名`permissions`和库中的类文件`permissions`同名，
+# 因此建议使用时采取完全引用或创建别名
+
+permission_classes = [permissions.IsAuthenticatedOrReadOnly,
+                      snippets.permissions.IsOwnerOrReadOnly]
+```
+
+现在登陆浏览器，你会发现，只有在登陆了相应作者的账户时，DELETE和PUT选项才会在前端后台展示出来。
+
+#### 用户鉴权方式
+
+在这个例子中，我们使用的是django REST framework的默认鉴权模式，即
+
+`SessionAuthentication`和 `BasicAuthentication`。这两种模式都不需要单独创建*授权类 [authentication classes](https://www.django-rest-framework.org/api-guide/authentication/)*，但会存在一些缺点：
+
+比如使用`SessionAuthentication`，会让权限判断全部在后端服务器上，那么当用户很多的时候，重复鉴权就会拖慢后端服务器的性能。因此现在多采用`TokenAuthentication`等方式，在[附录部分](#10)我们会解释如何使用其他的鉴权方式。
+
 ### 5 使用超链接API处理实体关系 Relationships & Hyperlinked APIs
+
+<span id=5></span>
 
 ### 6 视图集和路由器 ViewSets & Routers
 
