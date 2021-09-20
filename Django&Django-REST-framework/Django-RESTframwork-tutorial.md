@@ -190,9 +190,9 @@ INSTALLED_APPS = [
 
 ## REST 教程详述 
 
-### 1 模型与序列化 Model&Serialization
+这部分教程，我们要完成一个高亮显示代码的网页的api构建，并学习 django REST 有关的知识。
 
-这部分教程，我们要完成一个高亮显示代码的网页的api构建，并学习 django REST 有关序列化的知识。
+### 1 模型与序列化 Model & Serialization
 
 新建一个django app （你也可以直接新建项目，再创建app），名为“snippets”：
 
@@ -317,7 +317,7 @@ class Snippet(models.Model):
 
 当你的数据模型直接有关联关系时，需要以下额外定义保证不同数据库之间的数据更新正确。
 
-- 多对一
+- **多对一**
 
   在“多”方的数据模型类中，增加“一”方类型的对象，使用`models.ForeignKey`：
 
@@ -335,7 +335,7 @@ class Snippet(models.Model):
 >
 > 这对于一对一的关系也适用。
 
-- 多对多
+- **多对多**
 
   在任意一个“多”方的数据模型中，使用`models.ManyToManyField`：
 
@@ -351,7 +351,7 @@ class Snippet(models.Model):
   不要在两个模型中都添加ManyToMany字段，并且一般来讲，应该把 `ManyToManyField`
   实例放到**需要在表单中被编辑的对象**中。
 
-- 带有属性的多对多
+- **带有属性的多对多**
 
   在定义多对多字段时，添加参数 `through=` ，值为一个中间模型的名称，其包含该多对多关系的属性
 
@@ -378,7 +378,7 @@ class Snippet(models.Model):
 
   关于中间模型的限制条件，参考[ManyToManyField](https://docs.djangoproject.com/zh-hans/3.2/topics/db/models/#extra-fields-on-many-to-many-relationships)
 
-- 一对一
+- **一对一**
 
   在子级的“一”方数据模型中，使用`models.OneToOneField`引用父级的“一”方：
 
@@ -398,7 +398,7 @@ class Snippet(models.Model):
   
   ```
 
-  如果指定外键为该模型的主键，那么参数`primary_key=True`必须显示声明，否则django仍然会为该模型创建一个`AutoField`的id主键。
+  如果要指定外键为该模型的主键，那么参数`primary_key=True`必须显示声明，否则django仍然会为该模型创建一个`AutoField`的id主键。
 
   因此可以在单个模型当中指定多个 [`OneToOneField`](https://docs.djangoproject.com/zh-hans/3.2/ref/models/fields/#django.db.models.OneToOneField) 的字段。
 
@@ -557,7 +557,7 @@ urlpatterns = [
 
 即可完成对`snippets/urls.py`文件中所有路由的应用。
 
-最后，别忘了要使用命令行，使用ORM初始化数据库，否则django将无法连接到对应的数据库。
+最后，别忘了要使用以下命令行，通过ORM初始化数据库，否则django将无法连接到对应的数据库。
 
 ```
 python manage.py makemigrations
@@ -567,7 +567,163 @@ python manage.py migrate
 
 到这里，高亮显示代码的网页的api就完成啦！接下来你可以使用命令行、rest_framework前端和apifox等第三方工具对其进行测试。
 
-### 2 请求与响应  Requests and Responses
+### 2 请求与响应  Requests & Responses
+
+#### REST api支持
+
+REST 框架下引入了一个新的`Request`类，其继承于python库的`HttpRequest`，但拥有更多功能。
+
+比如在不使用REST framework时，request.POST只能让你处理POST方法的相关数据，
+
+但现在，使用新`Request`类的request.data，你可以处理多种方法（POST、PUT、PATCH）的数据，所以更加的RESTful。
+
+相应的，响应体也会由REST framework的`Response`代替，而不再使用`JSONResponse`等直接返回一种格式的相应。响应体需要渲染成何种格式可以由发起请求的一方（客户端）来决定 。
+
+```python
+return Response(data) # Renders to content type as requested by the client.
+```
+
+此外，不要再使用数字`status=400`做http返回状态码了，这样会降低代码的可读性，使用`status`的枚举来代替它们，比如`status.HTTP_400_BAD_REQUEST`.
+
+要使用REST framework提供的`Request`和`Response`，需要导入以下命名空间：
+
+```python
+from rest_framework import status # 导入http状态码枚举
+from rest_framework.decorators import api_view # 导入view请求处理
+from rest_framework.response import Response # 导入返回体
+```
+
+然后在你的View层函数前，加上修饰词`@api_view([])`，列表里填写你的函数涉及到的请求方法，如`'GET','POST','PUT','DELETE'`等。
+
+通常来说，一个函数对应一个URL的请求，但可以包含若干个不同的请求方法。加入`@api_view`修饰词的目的是告诉REST framework，在这个view函数里，其接受的request请求都必须是符合REST规范的。
+
+#### 修改之前View代码
+
+使用REST api，将`snippets/views.py`的代码完善如下：
+
+```python
+from rest_framework import status
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from snippets.models import Snippet
+from snippets.serializers import SnippetSerializer
 
 
+@api_view(['GET', 'POST']) # 这个方法对应的URL请求只接受 GET 和 POST
+def snippet_list(request):
+	# 如果请求方式为GET，返回所有snippet的列表
+    if request.method == 'GET':
+        snippets = Snippet.objects.all()
+        serializer = SnippetSerializer(snippets, many=True)
+        # 请求方法为GET时，可以不填写status，成功时Response会为我们自动返回200
+        return Response(serializer.data)
+    
+	# 如果请求方式为POST，接收请求的参数并新建一个snippet
+    elif request.method == 'POST':
+        serializer = SnippetSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            # 使用Response返回响应体，并用枚举代替纯数字的http状态码
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET', 'PUT', 'DELETE']) # 这个方法对应的URL请求只接受 GET、POST和DELETE
+def snippet_detail(request, pk):
+    # 先判断请求的数据实例是否存在
+    try:
+        snippet = Snippet.objects.get(pk=pk)
+    except Snippet.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = SnippetSerializer(snippet)
+        return Response(serializer.data)
+
+    elif request.method == 'PUT':
+        serializer = SnippetSerializer(snippet, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == 'DELETE':
+        snippet.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+```
+
+可以看到，使用`@api_view` 和`Response`，我们基本摆脱了使用某种特定格式（json）进行序列化。现在请求可以使用任何格式（只要RESTful支持），我们的代码就会返回相应格式的数据给客户端。我们也无需在响应的时候区分`HttpResponse`和`JSONResonse`等等，这样极大地提升了代码的健壮性。
+
+#### 增加URL格式后缀支持
+
+为了让“请求格式自由”在我们的api上显示的体现出来，不妨让使用不同格式的请求，在访问URL的时候，增加表明自己格式的后缀，比如：
+
+```python
+http http://127.0.0.1:8000/snippets.json  # .json表示这是一个json请求
+http http://127.0.0.1:8000/snippets.api   # .api表示这是一个api可浏览式请求
+```
+
+这样前端在请求的时候，就无需再额外指定可接受的格式类型，只要在URL末端加上这么一个简单的后缀即可。
+
+要添加这样的后缀支持，只需在View定义函数的时候，在参数后面加上`format=None`，比如我们将之前的两个函数定义改为：
+
+```python
+def snippet_list(request, format=None):
+	
+def snippet_detail(request, pk, format=None):
+```
+
+然后去到`snippets/urls.py`路由文件，将`urlpatterns`列表使用REST framework提供的`format_suffix_patterns`方法进行打包，即可大功告成：
+
+```python
+from django.urls import path
+from rest_framework.urlpatterns import format_suffix_patterns
+from snippets import views
+
+urlpatterns = [
+    path('snippets/', views.snippet_list),
+    path('snippets/<int:pk>', views.snippet_detail),
+]
+
+urlpatterns = format_suffix_patterns(urlpatterns)
+```
+
+现在进行测试，可以看到不论采取何种请求格式，都可以获得相同的结果：
+
+```python
+# 注：原文作者使用的是httpie
+
+# POST using form data 
+http --form POST http://127.0.0.1:8000/snippets/ code="print(123)"
+
+{
+  "id": 3,
+  "title": "",
+  "code": "print(123)",
+  "linenos": false,
+  "language": "python",
+  "style": "friendly"
+}
+
+# POST using JSON
+http --json POST http://127.0.0.1:8000/snippets/ code="print(456)"
+
+{
+    "id": 4,
+    "title": "",
+    "code": "print(456)",
+    "linenos": false,
+    "language": "python",
+    "style": "friendly"
+}
+```
+
+
+
+### 3 基于类的视图实现 Class-based Views
+
+### 4 授权与鉴权 Authentication & Permissions
+
+### 5 使用超链接API处理实体关系 Relationships & Hyperlinked APIs
+
+### 6 视图集和路由器 ViewSets & Routers
 
