@@ -1,3 +1,5 @@
+
+
 ## Django REST framework 入门指南
 
 ### REST 框架基本概述 （QuickStart）
@@ -1113,7 +1115,319 @@ permission_classes = [permissions.IsAuthenticatedOrReadOnly,
 
 ### 5 使用超链接API处理实体关系 Relationships & Hyperlinked APIs
 
-<span id=5></span>
+<span id=5>到现在为止，我们的API依然采用主键的方式。现在我们需要是增强我们API的内聚性。因此这一部分我们将使用超链接来处理实体间的关系。</span>
+
+#### 创建API_root
+
+如同我们对待'snippets' 和 'users'模型类一样，现在我们也为API单独创建一个根入口：使用基于函数的形式，在`snippets/views.py`中创建一个名为api_root的函数：
+
+```python
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework.reverse import reverse
+
+
+@api_view(['GET'])
+def api_root(request, format=None):
+    return Response({
+        'users': reverse('user-list', request=request, format=format),
+        'snippets': reverse('snippet-list', request=request, format=format)
+    })
+```
+
+创建这个“根入口”的目的，是为了让任意请求可以方便的获取**所有**数据模型类的**超链接**，生成这个超链接的方法，即使用REST framework提供的`reverse()`函数，它可以返回一个数据模型了所有符合要求的URL，即我们在`snippets/urls.py`起过名字的相应URL。
+
+将创建的api根入口加到`urlpattens`中：
+
+```python
+path('', views.api_root),
+```
+
+#### 创建高亮代码View视图类
+
+为了实现用户直接在浏览器观看高亮代码的功能，我们还需要一个返回先前创建的高亮文本字段的视图类，给它起名为`SnippetHighlight`：
+
+```python
+# 增加导入该渲染包
+from rest_framework import renderers
+
+class SnippetHighlight(generics.GenericAPIView):
+    queryset = Snippet.objects.all()
+    renderer_classes = [renderers.StaticHTMLRenderer]
+
+    def get(self, request, *args, **kwargs):
+        snippet = self.get_object()
+        return Response(snippet.highlighted)
+```
+
+在这个视图类中，我们没有使用JSON返回格式，而是使用了静态HTML的格式（先进行预渲染），因此使用了` renderer_classes = [renderers.StaticHTMLRenderer]`，并且我们重载了get函数，只返回snippet对象的高亮文本字段。
+
+将创建的高亮视图类加入到`urlpatterns`中：
+
+```python
+path('snippets/<int:pk>/highlight/', views.SnippetHighlight.as_view()),
+```
+
+#### 增加超链接
+
+超链接实体关系，简言之，就是通过查询URL，找到*关系的一方*所引用的*关系的另一方*的序列化类，从而获取实体间关系信息。
+
+为了使用超链接关系，我们需要修改序列化类的定义，将之前使用的`serializers.`修改为`HyperlinkedModelSerializer`
+
+使用`HyperlinkedModelSerializer`，它将**不会**为序列化对象生成名为`id`的主键。取而代之的是一个名为`url`的字段，其存储*关系的外键*所对应的视图类/函数的URL。
+
+将`snippets/serializers.py`的代码修改为：
+
+```python
+# 使用serializers.HyperlinkedModelSerializer替代serializers.serializers
+class SnippetSerializer(serializers.HyperlinkedModelSerializer):
+    owner = serializers.ReadOnlyField(source='owner.username')
+    # 使用HyperlinkedIdentityField代替PrimaryKeyRelatedField
+    # 加入一对一的highlight字段，序列化高亮代码，注意这里将格式设置为'html'
+    highlight = serializers.HyperlinkedIdentityField(view_name='snippet-highlight', format='html')
+
+    class Meta:
+        model = Snippet
+        fields = ['url', 'id', 'highlight', 'owner',
+                  'title', 'code', 'linenos', 'language', 'style']
+
+
+class UserSerializer(serializers.HyperlinkedModelSerializer):
+    # 相同的，如果是一对多关系，将参数many设置为True
+    snippets = serializers.HyperlinkedRelatedField(many=True, view_name='snippet-detail', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['url', 'id', 'username', 'snippets']
+```
+
+#### 配置URL路径命名
+
+在之前加入超链接时，我们发现其传入的参数为`view_name = '【url-pattens】'`
+
+这里传入的即为视图层的URL路径名，为了让这个命名正确引用，必须在`url.py`文件中正确命名。
+
+对应的命名规则如下：
+
+- API 根路径命名：例如 `'user-list'` 和 `'snippet-list'`（这是在`api_root()`的视图根函数定义的）
+- 单个序列化类外键的路径命名：例如 `'snippet-highlight'`和`'snippet-detail'`（分别是在`SnippetSerializer`和`UserSerializer`序列化类的`HyperlinkedRelatedField`中定义的）
+- 单个序列化类默认主键的路径命名：会被自动以`'【model_name】-detail'`，命名，例如 `'snippet-detail'` 和 `'user-detail'`
+
+因此，修改`urlpatterns`如下：
+
+```python
+from django.urls import path
+from rest_framework.urlpatterns import format_suffix_patterns
+from snippets import views
+
+# API endpoints
+urlpatterns = format_suffix_patterns([
+    path('', views.api_root),
+    # snippets根目录
+    path('snippets/',
+        views.SnippetList.as_view(),
+        name='snippet-list'),
+    # 单个snippet具体页面
+    path('snippets/<int:pk>/',
+        views.SnippetDetail.as_view(),
+        name='snippet-detail'),
+    # 但snippet对应高亮页面
+    path('snippets/<int:pk>/highlight/',
+        views.SnippetHighlight.as_view(),
+        name='snippet-highlight'),
+    # 用户根目录
+    path('users/',
+        views.UserList.as_view(),
+        name='user-list'),
+    # 单个用户具体页面
+    path('users/<int:pk>/',
+        views.UserDetail.as_view(),
+        name='user-detail')
+])
+```
+
+#### 增加分页
+
+在项目配置文件的`settings.py`中加入如下配置，即可让REST framework在默认返回列表类型的对象时，使用分页方式返回：
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10
+}
+```
+
+有关自定义分页格式，参见[附录](#11)
+
+最终我们的api返回格式如下：
+
+
 
 ### 6 视图集和路由器 ViewSets & Routers
+
+虽然我们已经学会了用最简洁的方式，创建一系列视图类，但似乎在视图很多很复杂的方法，一堆视图类仍然不是最好的方案。在REST framework中，提供了一个抽象类`ViewSet`，它允许开发者在构建URL前构建视图，把配置URL交给对应的`Routers`完成。只要实例化一个视图集类对象，即可创建一系列通用的视图类集合。
+
+ViewSet类在使用上几乎和View一致，但可用的操作从`get`,`put`之类的变为了`retrieve`和`update`。
+
+#### 使用视图集更新视图类
+
+回到`views.py`，现在我们来用`ViewSet`替代之前写的所有视图类。
+
+我们先将有关用户的两个视图：`UserList` 和 `UserDetail`合并到一个视图集，起名为`UserViewSet`.
+
+```python
+from rest_framework import viewsets
+
+# `viewsets.ReadOnlyModelViewSet` 会默认将所有可读的方法都设置为只读
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    该viewset会自动提供`list`和`retrieve`操作，无需你撰写代码
+    """
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+```
+
+按照这个模式，我们再把  `SnippetList`, `SnippetDetail` 和 `SnippetHighlight` 修改为一个视图集类：
+
+```python
+class SnippetViewSet(viewsets.ModelViewSet):
+    """
+    该viewset 会自动提供`list`, `create`, `retrieve`,
+    `update` 和`destroy` 操作.
+
+    我们自定义的 `highlight`和`perform_create` 操作，需要额外实现.
+    """
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly,
+                          IsOwnerOrReadOnly]
+
+    @action(detail=True, renderer_classes=[renderers.StaticHTMLRenderer])
+    def highlight(self, request, *args, **kwargs):
+        snippet = self.get_object()
+        return Response(snippet.highlighted)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+```
+
+注意到我们仍然使用了`@action`修饰词，这是为了创建不属于`ModelViewSet`定义的基本操作（增删改查和列表查）的操作函数，它的参数如下：
+
+| 参数             | 含义                           | 备注                                                         |
+| ---------------- | ------------------------------ | ------------------------------------------------------------ |
+| detail           | 函数是否采用详细定义           | True或False，决定生成URL的格式，具体见下表                   |
+| method           | 函数接受的HTTP请求方式         | 若不填，默认值为GET<br/>若填入其他请求方式，请传入列表和字符串，如method=['post'] |
+| url_path         | 函数对应的URL路径名            | 若不填，默认值参考下表生成                                   |
+| url_name         | 函数对应的URL配置路径参数名    | 若不填，默认值参考下表生成                                   |
+| renderer_classes | 函数的返回包采用何种渲染器渲染 | 应传入列表                                                   |
+
+自动路由产生的URL格式说明：
+
+- {basename}：视图集类的前缀名，即`XXXXXViewSet`中的`XXXX`（忽略首字母大写）
+
+- {prefix}：前缀，即该视图集下已有相应请求方法时，将其url作为前缀，否则前缀为{basename}
+
+- {url_path}：一个其他的的url连接
+
+- {lookup}：列表数据的主键值，如`<int:pk>`
+
+| 生成的URL格式                 | HTTP 请求方法                              | Action操作类型或相应参数                                     | 生成的URL Name        |
+| ----------------------------- | ------------------------------------------ | ------------------------------------------------------------ | --------------------- |
+| {prefix}/                     | GET<br>POST                                | list<br/>create 【默认生成】                                 | {basename}-list       |
+| {prefix}/{url_path}/          | GET, 或其他由 `methods` 参数指定的请求方法 | `@action(detail=False)` 将detail参数设置为False              | {basename}-{url_name} |
+| {prefix}/{lookup}/            | GET<br>PUT<br>PATCH<br>DELETE              | retrieve<br/>update<br/>partial_update<br/>destroy【默认生成】 | {basename}-detail     |
+| {prefix}/{lookup}/{url_path}/ | GET, 或其他由 `methods` 参数指定的请求方法 | `@action(detail=True)`   将detail参数设置为True              | {basename}-{url_name} |
+
+#### 手动将视图集和URL绑定
+
+> 注意：这不是必须的，后面我们会使用`Router`路由器来简化相应步骤
+
+为了让视图集正确工作（能够按照规则生成对应的URL索引），需要在对应app的是url配置文件里定义不同方法对应的视图集操作索引。
+
+修改 `snippets/urls.py` 如下：
+
+```python
+from snippets.views import SnippetViewSet, UserViewSet, api_root
+from rest_framework import renderers
+
+# 为了代码可读性，我们为每个增加索引的api_view对象重新赋值到新的变量
+snippet_list = SnippetViewSet.as_view({
+    'get': 'list',
+    'post': 'create'
+})
+snippet_detail = SnippetViewSet.as_view({
+    'get': 'retrieve',
+    'put': 'update',
+    'patch': 'partial_update',
+    'delete': 'destroy'
+})
+snippet_highlight = SnippetViewSet.as_view({
+    'get': 'highlight'
+}, renderer_classes=[renderers.StaticHTMLRenderer])
+user_list = UserViewSet.as_view({
+    'get': 'list'
+})
+user_detail = UserViewSet.as_view({
+    'get': 'retrieve'
+})
+
+urlpatterns = format_suffix_patterns([
+    path('', api_root),
+    path('snippets/', snippet_list, name='snippet-list'),
+    path('snippets/<int:pk>/', snippet_detail, name='snippet-detail'),
+    path('snippets/<int:pk>/highlight/', snippet_highlight, name='snippet-highlight'),
+    path('users/', user_list, name='user-list'),
+    path('users/<int:pk>/', user_detail, name='user-detail')
+])
+```
+
+增加索引的方法，即在调用对应`ViewSet`的`.as_view()`函数中，将HTTP请求名和ViewSet操作名按照字典格式一一对应传入即可，注意`list`, `create`, `retrieve`,   `update` 和`destroy`都是默认的ViewSet操作名。
+
+但我们还可以使用更简单的方法。
+
+#### 使用路由器
+
+既然在之前的定义视图集的时候，我们已经说明了操作对应的HTTP请求方式（自定义操作默认为GET），那为何还要在url配置文件中再写一遍呢。因此我们可以直接调用REST framework的`Router`路由器类，来为我们自动路由，生成对应的URL配置参数。
+
+因此，最终 `snippets/urls.py` 简化如下：
+
+```python
+from django.urls import path, include
+# 导入路由器类
+from rest_framework.routers import DefaultRouter
+from snippets import views
+
+# 实例化一个路由器对象，将我们写好的视图集作为参数传入.
+router = DefaultRouter()
+router.register(r'snippets', views.SnippetViewSet)
+router.register(r'users', views.UserViewSet)
+
+# 只需`include`路由器对象，即无需再写所有的url配置参数.
+urlpatterns = [
+    path('', include(router.urls)),
+]
+```
+
+使用`Router`的注意事项：
+
+- 观察到注册视图到路由器的时候，传入的参数是正则字符串，因此一个路由器类对象可以实例化若干个视图集，可通过视图集名称进行正则索引
+- `Router`最终生成的路由URL由你在视图集定义的时候所采用的命名和序列化的数据有关
+  - 比如你为名为`SnippetsViewSet`的视图集，并传入了一个`snippet`的列表序列化类作为参数，则其增删改查对应的即为`snippets/<int:pk>/`的POST,DELETE,PUT和GET请求对应的URL，而返回列表的操作为`snippets/`的GET操作
+  - 我们自定义的操作，如`snippets/<int:pk>/highlight/`，其生成的URL地址与你在`@action`修饰符中的填写的参数和定义的函数名有关（详见上）
+
+虽然使用视图集和路由器类，能**最大程度的抽象API路由和简化代码**；但其不代表这一定是你的最佳选择。有的时候，**单独来写视图、URL索引能增加代码可扩展性，后期维护更加方便**。
+
+因此，权衡利弊，选择权在你自己的手里。
+
+## 附录
+
+这些是你在使用django REST framework中可能遇到的各种其他问题和解决方案。
+
+### Token方式鉴权实现
+
+### 自定义分页格式
+
+
+
+
 
