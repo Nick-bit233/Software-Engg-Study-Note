@@ -1423,7 +1423,268 @@ urlpatterns = [
 
 这些是你在使用django REST framework中可能遇到的各种其他问题和解决方案。
 
-### Token方式鉴权实现
+### 授权实现
+
+在REST framework中，你可以使用多种授权方法，方法即定义（或使用REST提供的）一个**授权类的列表**，每一个授权类对应一种鉴权方式。在请求发送过来后，REST framework会尝试使用该列表的每个鉴权方式来判定请求者的身份。一旦某一种鉴权方式成功，则将`request.user`和`request.auth`的值按照对应鉴权方式的返回值进行设置。
+
+如果找不到任何授权类和鉴权方式，`request.user`会被置为默认值`django.contrib.auth.models.AnonymousUser`，而`request.auth`会被置为默认值`None`。默认值可以在`setting`文件中通过修改 `UNAUTHENTICATED_USER` 和`UNAUTHENTICATED_TOKEN` 参数来修改
+
+在`setting`文件中，通过修改`REST_FRAMEWORK`的`DEFAULT_AUTHENTICATION_CLASSES`字段，可以决定默认使用哪些鉴权方式，如：
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.BasicAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ]
+}
+```
+
+在使用APIView定义的视图类中，可以使用`authentication_classes`决定该视图中使用的授权类；而若使用 `@api_view` 修饰词的方法，则请额外使用`@authentication_classes`修饰词来确定授权类，注意传入的参数均为授权类列表。
+
+鉴权失败回应：
+
+如果未经授权的请求进入后端，REST framework会返回两种HTTP状态：
+
+- [HTTP 401 Unauthorized](https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.4.2)
+- [HTTP 403 Permission Denied](https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.4.4)
+
+401表示传入的请求没有授权，而403表示请求已有授权，但仍然被拒绝访问，这说明请求被拒的原因已经无关授权方式的选择。
+
+具体返回的响应体内容，由你使用的鉴权方式决定。之前说到你可以同时使用若干个不同的鉴权方式，因此最终的相应包返回的永远是**第一个（优先级最高的）授权类对应的鉴权方式**
+
+接下来介绍四种API鉴权方式：
+
+#### Basic方式鉴权
+
+[BasicAuthentication](https://www.django-rest-framework.org/api-guide/authentication/#basicauthentication)使用[HTTP Basic Authentication](https://tools.ietf.org/html/rfc2617)进行用户名和密码的传输。因此它**很不安全**，一般只用于测试。
+
+> 如果你一定要用的话，注意保证两点：1、使用加密的https，2、不要长时间在前端存储用户名和密码信息，尽量让每个其他的请求都重新请求授权
+
+如果授权成功，可以获得以下信息：
+
+- `request.user` 将被赋值为一个django `User` 对象
+- `request.auth`将被赋值为 `None`.
+
+#### Token方式鉴权
+
+[TokenAuthentication](https://www.django-rest-framework.org/api-guide/authentication/#tokenauthentication)采用基于Token的HTTP鉴权方式，它非常适用于前后端分离的客户端-服务端架构，例如桌面APP和移动客户端。
+
+> 简答来说，即用户首次登陆的时候（采用其他鉴权方式），为用户生成一串唯一标识符（即Token）。登陆有效期内，用户只要在请求上附上这一段Token，即可表明自己的已授权身份，这大大减少了在请求非常多的情况下，服务器端的鉴权负载。
+>
+> 要使用TokenAuthentication，请保证你的API只使用加密https。
+
+要使用TokenAuthentication，除了要按照之前所说的，在配置文件中加入对应的鉴权方式外，还要将`rest_framework.authtoken` 这一app，加入到 `INSTALLED_APPS`参数的列表中，即在`setting.py`中配置：
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        ...
+        'rest_framework.authentication.TokenAuthentication',
+    ]
+}
+
+INSTALLED_APPS = [
+    ...
+    'rest_framework.authtoken'
+]
+```
+
+这里进行修改后，记得需要运行命令行`manage.py migrate`来刷新数据库，因为`'rest_framework.authtoken'`这个app中包含有关数据库的操作。
+
+然后我们可以开始为用户创建Token：
+
+```python
+from rest_framework.authtoken.models import Token
+
+token = Token.objects.create(user=【你的用户对象】)
+print(token.key)
+```
+
+对于前端应用来说，为了使得请求被接受，其HTTP传输头header必须包含一个`Authorization`字段，并传入 `字符串'Token' + 一个空格' ' + Token值 `的格式，才能被django正确接受。例如：
+
+```json
+Authorization: Token 9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b
+```
+
+> 备注：如果你想使用其他的header关键字代替这里的`Token`（比如一个`Bearer`），新建一个继承自`TokenAuthentication`的子类，并将其`keyword`属性改为你需要的关键字，然后使用这个新授权类即可。
+
+如果授权成功，可以获得以下信息：
+
+- `request.user` 将被赋值为一个django `User` 对象
+- `request.auth` 将被赋值为一个 `rest_framework.authtoken.models.Token`对象.
+- 未授权用户，将返回HTTP 403错误
+
+在Token鉴权的使用场景中，主要有如下的Token生成方式：
+
+##### 使用singal实现Token自动生成
+
+如果你有批量的用户，并且需要每次新建用户的时候都自动生成Token，可以考虑如下方法：
+
+首先抓获用户类的`post_save`信号：
+
+```python
+from django.conf import settings
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from rest_framework.authtoken.models import Token
+
+# 修饰词`reveiver`标识这是一个接受信号的函数
+@receiver(post_save, sender=settings.AUTH_USER_MODEL)
+def create_auth_token(sender, instance=None, created=False, **kwargs):
+    if created:
+        Token.objects.create(user=instance)
+```
+
+这段代码要写在可以被django初始化调用的文件里，推荐的位置是数据底层的`models.py`文件。这样，每当新用户被创建时，一个新的唯一Token就会被生成。
+
+如果你已经有了若干用户，则可以用如下代码，为每个用户生成Token：
+
+```python
+from django.contrib.auth.models import User
+from rest_framework.authtoken.models import Token
+
+for user in User.objects.all():
+    Token.objects.get_or_create(user=user)
+```
+
+##### 从前端请求生成Token
+
+当你使用 `TokenAuthentication`时，一般用户首次登陆的时候提供用户名和密码，然后前端会发送*尝试获得Token的请求*。在REST framework中有一个内置的View，可以帮你完成这个自动发送Token给前端的任务。
+
+在你的app对应的url配置文件里，引入`obtain_auth_token`视图：
+
+```python
+from rest_framework.authtoken import views
+urlpatterns += [
+    # url地址的部分，你可以自定义
+    path('api-token-auth/', views.obtain_auth_token)
+]
+```
+
+当用户提供正确的用户名和密码（json格式或form data格式）时，它会返回一个含有Token的JSON包：
+
+```json
+{ 'token' : '9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b' }
+```
+
+> 注意：默认的`obtain_auth_token`视图会固定使用JSON请求和相应格式，而不是你在配置文件里设置的 默认渲染器以及解释器。
+
+如果你想要返回给前端除了Token以外的更多信息，请新建一个**继承`ObtainAuthToken`类的视图类**，然后自定义返回体，例如：
+
+```python
+from rest_framework.authtoken.views import ObtainAuthToken
+from rest_framework.authtoken.models import Token
+from rest_framework.response import Response
+
+class CustomAuthToken(ObtainAuthToken):
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.serializer_class(data=request.data,
+                                           context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data['user']
+        # 为用户创建Token
+        token, created = Token.objects.get_or_create(user=user)
+        return Response({
+        	# token.key获取Token的值
+            'token': token.key,
+            'user_id': user.pk,
+            'email': user.email
+        })
+```
+
+然后替代`obtain_auth_token`，将这个类写进urlpattens中：
+
+```python
+urlpatterns += [
+    path('api-token-auth/', CustomAuthToken.as_view())
+]
+```
+
+##### 在Django admin后台生成Token
+
+在Django内置的后台管理页面中，可以通过其提供的前端界面，手动生成Token。在面对大量用户时，我们推荐你重载`TokenAdmin`类的定义，一遍自定义前端界面。简单来说，只要在你的app的 `admin.py`中，重定义`user`字段为一个`raw_field`字段即可：
+
+```python
+from rest_framework.authtoken.admin import TokenAdmin
+
+TokenAdmin.raw_id_fields = ['user']
+```
+
+##### 命令行手动生成Token
+
+从3.6.4版本后，你可以直接使用以下命令行生成对应于用户的Token：
+
+```shell
+./manage.py drf_create_token <username>
+```
+
+若想要为某个用户重新分配Token，加入参数`-r`：
+
+```shell
+./manage.py drf_create_token -r <username>
+```
+
+#### Session方式鉴权
+
+[SessionAuthentication](https://www.django-rest-framework.org/api-guide/authentication/#sessionauthentication)使用Django的默认session后端进行鉴权，它适用于AJAX（异步JavaScript和XML）的客户端
+
+> 当用户在不同的页面跳转的时候，Session会临时存储用的授权信息，使用户保持被授权的状态。但如果用户长时间无操作，Session则会在一定时间后失效以保证安全。
+
+如果成功授权， `SessionAuthentication` 会返回如下信息：
+
+- `request.user` 将被赋值为一个django `User` 对象
+- `request.auth`将被赋值为 `None`.
+
+- 未授权用户，将返回HTTP 403错误
+
+如果你正在设计一个AJAX样式的API，注意保证你在使用SessionAuthentication时，对于任何*不安全*的HTTP请求（`PUT`, `PATCH`, `POST` 和 `DELETE`），要求其包含一个CSRF的token，详见[Django CSRF documentation](https://docs.djangoproject.com/en/stable/ref/csrf/#ajax)
+
+#### RemoteUser方式鉴权
+
+使用”远程用户“的鉴权方式，你可以使用一个远程服务器替你完成鉴权的工作。
+
+为了使用远程鉴权，在你的`setting`配置里，必须包含一个有`django.contrib.auth.backends.RemoteUserBackend` (或其自定义子类) 值的`AUTHENTICATION_BACKENDS`字段。
+
+一般来说， `RemoteUserBackend` 会为任何未重名的用户创建`User`对象。如果要修改这部分内容，参考Django提供的文档：[Django documentation](https://docs.djangoproject.com/en/stable/howto/auth-remote-user/)
+
+如果成功授权， `SessionAuthentication` 会返回如下信息：
+
+- `request.user` 将被赋值为一个django `User` 对象
+- `request.auth`将被赋值为 `None`.
+
+> 如果要使用远程鉴权，你需要搭建一个网络服务端框架。相应的配置由其决定，例如：
+>
+> - [Apache Authentication How-To](https://httpd.apache.org/docs/2.4/howto/auth.html)
+> - [NGINX (Restricting Access)](https://docs.nginx.com/nginx/admin-guide/security-controls/configuring-http-basic-authentication/)
+
+#### 自定义鉴权类
+
+为了写一个你自己的鉴权方式，继承`BaseAuthentication`类，并重写`.authenticate(self, request)`函数，如果鉴权成功，该函数应返回一个`(user, auth)` 元组，否则其应返回`None`（或是抛出一个 `AuthenticationFailed`异常）
+
+你也可以重写`.authenticate_header(self, request)`函数，这将使得鉴权失败时，返回HTTP 401状态码。此时错误说明中的 `WWW-Authenticate` header将变为你重载的函数的返回值。如果没有重载该函数，授权类或默认返回HTTP 403状态码。
+
+举例，以下自定义授权类将只鉴权请求头名称为`X-USERNAME`的含有用户名的请求：
+
+```python
+from django.contrib.auth.models import User
+from rest_framework import authentication
+from rest_framework import exceptions
+
+class ExampleAuthentication(authentication.BaseAuthentication):
+    def authenticate(self, request):
+        username = request.META.get('HTTP_X_USERNAME')
+        if not username:
+            return None
+
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            raise exceptions.AuthenticationFailed('No such user')
+
+        return (user, None)
+```
 
 ### 自定义分页格式
 
