@@ -1688,6 +1688,61 @@ class ExampleAuthentication(authentication.BaseAuthentication):
 
 ### 自定义分页格式
 
+可以在项目配置文件夹中的`setting.py`设置全局分页格式，包括`DEFAULT_PAGINATION_CLASS` 和`PAGE_SIZE`两个字段值，例如：
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
+    'PAGE_SIZE': 100
+}
+```
+
+这两个字段的默认值均为`None`。
+
+除此之外，还可以为每个视图单独设置`pagination_class`属性，用来决定其使用的分页类。通常来说，你的所有API都应该使用同一套分页标准，但你仍然可以根据你的需求修改分页类的属性，来方便不同情况下API的需要。
+
+#### 修改一个分页类
+
+如果你只是想修改默认分页类的一些基本属性，例如默认和最大页大小之类，可以使用继承标准类的方式：
+
+```python
+# 定义一个大型分页类
+class LargeResultsSetPagination(PageNumberPagination):
+    page_size = 1000
+    page_size_query_param = 'page_size'
+    max_page_size = 10000
+
+# 定义一个标准分页类
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
+```
+
+为了应用自定义分页类，你可以在视图类中指定`pagination_class`属性为你的自定义分页类，这会使得该视图按照对应分页类的参数返回分页的数据。
+
+```python
+class BillingRecordsView(generics.ListAPIView):
+    queryset = Billing.objects.all()
+    serializer_class = BillingRecordsSerializer
+    pagination_class = LargeResultsSetPagination
+```
+
+或者也可以直接将其应用于全局设置：
+
+```python
+# 推荐自定义分页类写在相应app的app.core目录下
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'apps.core.pagination.StandardResultsSetPagination'
+}
+```
+
+#### 标准分页库说明
+
+
+
+
+
 ### 链接其他的数据库
 
 django默认使用sqlite3数据库，这个数据库内置在django框架中，无需安装，使用方便，但性能一般。正式上线的产品，通常要使用功能更强大的数据库，例如Mysql。
