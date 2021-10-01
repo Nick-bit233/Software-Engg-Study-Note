@@ -1690,6 +1690,28 @@ class ExampleAuthentication(authentication.BaseAuthentication):
 
 ### 链接其他的数据库
 
+django默认使用sqlite3数据库，这个数据库内置在django框架中，无需安装，使用方便，但性能一般。正式上线的产品，通常要使用功能更强大的数据库，例如Mysql。
+
+修改django链接数据库的方式也很简单，只需在项目配置文件`setting.py`的`DATABASES`字段中修改属性为：
+
+```python
+DATABASES = {
+  'default': {
+      'ENGINE': 'django.db.backends.mysql', # 使用的数据库引擎，如mysql
+      'NAME': 'djangoDatabase',   # 数据库名
+      'USER': 'amdin',    # 数据库 用户名
+      'PASSWORD': 'xxxxxxx',# 数据库 用户密码
+      'HOST': '127.0.0.1', # 数据库服务主机名
+      'PORT': '3306',      # 数据库服务端口
+      'CONN_MAX_AGE': 0
+  }
+}
+```
+
+然后重新运行命令行migrate
+
+
+
 
 
 
