@@ -1686,7 +1686,7 @@ class ExampleAuthentication(authentication.BaseAuthentication):
         return (user, None)
 ```
 
-### 自定义分页格式
+### 分页格式详解
 
 可以在项目配置文件夹中的`setting.py`设置全局分页格式，包括`DEFAULT_PAGINATION_CLASS` 和`PAGE_SIZE`两个字段值，例如：
 
@@ -1739,9 +1739,89 @@ REST_FRAMEWORK = {
 
 #### 标准分页库说明
 
+##### 页码分页 PageNumberPagination
 
+这个分页类会要求 请求传入一个页码数字，从而达成索引页码的作用。 
 
+```json
+# 请求格式示例
+GET https://api.example.org/accounts/?page=4
 
+# 响应格式示例
+HTTP 200 OK
+{
+    "count": 1023
+    "next": "https://api.example.org/accounts/?page=5",
+    "previous": "https://api.example.org/accounts/?page=3",
+    "results": [
+       …
+    ]
+}
+
+```
+
+要使用页码分页，在REST配置的`'DEFAULT_PAGINATION_CLASS'`字段填入`'rest_framework.pagination.PageNumberPagination'`，
+
+`'PAGE_SIZE'`字段填入页大小（每一页含有多少条目）。
+
+或是在视图类下指定`pagination_class`属性为`PageNumberPagination`
+
+如果重载页码分页类，可以修改以下参数属性：
+
+- `django_paginator_class` - 使用的分页导航类。 默认值为`django.core.paginator.Paginator`, 其也是较为通用的，一般无需更改。
+- `page_size` -默认页面大小，这个属性会覆盖配置文件的`PAGE_SIZE `定义。否则其值为`PAGE_SIZE`定义大小相同。
+- `page_query_param` - 定义页码查询时使用的字符串。
+- `page_size_query_param` - If set, this is a string value indicating the name of a query parameter that allows the client to set the page size on a per-request basis. Defaults to `None`, indicating that the client may not control the requested page size.
+- `max_page_size` - If set, this is a numeric value indicating the maximum allowable requested page size. This attribute is only valid if `page_size_query_param` is also set.
+- `last_page_strings` - A list or tuple of string values indicating values that may be used with the `page_query_param` to request the final page in the set. Defaults to `('last',)`
+- `template` - The name of a template to use when rendering pagination controls in the browsable API. May be overridden to modify the rendering style, or set to `None` to disable HTML pagination controls completely. Defaults to `"rest_framework/pagination/numbers.html"`
+
+##### 偏移量分页 LimitOffsetPagination
+
+这种分页方式与数据库多表查询的方式一致。请求传入两个参数，一个表示最多返回的条目数量(limit，在其他分页方式下即为页大小)，另一个表示该页查询的条目在数据库的起始位置(offest)。
+
+```json
+# 请求格式示例
+GET https://api.example.org/accounts/?limit=100&offset=400
+
+# 响应格式示例
+HTTP 200 OK
+{
+    "count": 1023
+    "next": "https://api.example.org/accounts/?limit=100&offset=500",
+    "previous": "https://api.example.org/accounts/?limit=100&offset=300",
+    "results": [
+       …
+    ]
+}
+```
+
+要使用偏移量分页，在REST配置的`'DEFAULT_PAGINATION_CLASS'`字段填入`'rest_framework.pagination.LimitOffsetPagination'`，
+
+或是在视图类下指定`pagination_class`属性为`LimitOffsetPagination`
+
+`'PAGE_SIZE'`字段可以填入页大小，如果填入，则limit值默认会为`PAGE_SIZE`，而前端可以不传入limit参数。
+
+如果重载偏移量分页类，可以修改以下参数属性：
+
+- `default_limit` - A numeric value indicating the limit to use if one is not provided by the client in a query parameter. Defaults to the same value as the `PAGE_SIZE` settings key.
+- `limit_query_param` - A string value indicating the name of the "limit" query parameter. Defaults to `'limit'`.
+- `offset_query_param` - A string value indicating the name of the "offset" query parameter. Defaults to `'offset'`.
+- `max_limit` - If set this is a numeric value indicating the maximum allowable limit that may be requested by the client. Defaults to `None`.
+- `template` - The name of a template to use when rendering pagination controls in the browsable API. May be overridden to modify the rendering style, or set to `None` to disable HTML pagination controls completely. Defaults to `"rest_framework/pagination/numbers.html"`.
+
+##### 指针分页 CursorPagination
+
+如果重载指针分页类，可以修改以下参数属性：
+
+- `page_size` = A numeric value indicating the page size. If set, this overrides the `PAGE_SIZE` setting. Defaults to the same value as the `PAGE_SIZE` settings key.
+- `cursor_query_param` = A string value indicating the name of the "cursor" query parameter. Defaults to `'cursor'`.
+- `ordering` = This should be a string, or list of strings, indicating the field against which the cursor based pagination will be applied. For example: `ordering = 'slug'`. Defaults to `-created`. This value may also be overridden by using `OrderingFilter` on the view.
+- `template` = The name of a template to use when rendering pagination controls in the browsable API. May be overridden to modify the rendering style, or set to `None` to disable HTML pagination controls completely. Defaults to `"rest_framework/pagination/previous_and_next.html"`.
+
+##### 自定义分页类
+
+##### 第三方分页类
 
 ### 链接其他的数据库
 
