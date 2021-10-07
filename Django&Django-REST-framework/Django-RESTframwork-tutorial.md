@@ -1425,7 +1425,7 @@ urlpatterns = [
 
 ### 授权实现
 
-在REST framework中，你可以使用多种授权方法，方法即定义（或使用REST提供的）一个**授权类的列表**，每一个授权类对应一种鉴权方式。在请求发送过来后，REST framework会尝试使用该列表的每个鉴权方式来判定请求者的身份。一旦某一种鉴权方式成功，则将`request.user`和`request.auth`的值按照对应鉴权方式的返回值进行设置。
+<span id="10">在REST framework中，你可以使用多种授权方法，方法即定义（或使用REST提供的）一个**授权类的列表**，每一个授权类对应一种鉴权方式。在请求发送过来后，REST framework会尝试使用该列表的每个鉴权方式来判定请求者的身份。一旦某一种鉴权方式成功，则将`request.user`和`request.auth`的值按照对应鉴权方式的返回值进行设置。</span>
 
 如果找不到任何授权类和鉴权方式，`request.user`会被置为默认值`django.contrib.auth.models.AnonymousUser`，而`request.auth`会被置为默认值`None`。默认值可以在`setting`文件中通过修改 `UNAUTHENTICATED_USER` 和`UNAUTHENTICATED_TOKEN` 参数来修改
 
@@ -1843,7 +1843,17 @@ DATABASES = {
 }
 ```
 
-然后重新运行命令行migrate
+然后重新运行命令行migrate。
+
+> 若你使用python3以上版本，配置mysql时需要导入python2的引擎`MySQLdb`。在py3中，你可以使用`pymsql`包来完成这一配置
+>
+> 在配置文件夹的`__init__.py`文件中导入`pymysql`，并加入以下代码即可
+>
+> ```python
+> import pymysql
+> 
+> pymysql.install_as_MySQLdb()
+> ```
 
 
 
